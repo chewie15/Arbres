@@ -182,6 +182,6 @@ def help():
     """Get help text"""
     return jsonify({'help_text': HELP_TEXT})
 
-if __name__ == '__main__':
-    app.run()
+app.run(host='0.0.0.0', port=8501)
+
 
