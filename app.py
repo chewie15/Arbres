@@ -1,25 +1,20 @@
-"""
-Web version of the tree taxonomy quiz application
-"""
-from flask import Flask, render_template, request, jsonify, session
+import streamlit as st
 import random
 import unicodedata
 import string
 from tree_data import TREES, HELP_TEXT, DIFFICULTY_LEVELS
 
-app = Flask(__name__)
-app.secret_key = 'your-secret-key-here'  # Required for session management
-
-# Store session data
-quiz_data = {
-    'correct_answers': 0,
-    'total_questions': 0,
-    'current_tree': None,
-    'current_type': '',
-    'current_answer': '',
-    'difficulty': 'facile',  # Default difficulty
-    'attempts': 0  # Track number of attempts for current question
-}
+# Store session data in Streamlit state
+if 'quiz_data' not in st.session_state:
+    st.session_state.quiz_data = {
+        'correct_answers': 0,
+        'total_questions': 0,
+        'current_tree': None,
+        'current_type': '',
+        'current_answer': '',
+        'difficulty': 'facile',  # Default difficulty
+        'attempts': 0  # Track number of attempts for current question
+    }
 
 def normalize_answer(text):
     """Normalize text for comparison:
@@ -57,29 +52,17 @@ def get_genus_species_count():
         genus_count[genus] = genus_count.get(genus, 0) + 1
     return genus_count
 
-@app.route('/')
-def home():
-    """Render the quiz page"""
-    return render_template('quiz.html', difficulties=DIFFICULTY_LEVELS.keys())
+# Streamlit page setup
+st.title("Quiz de Taxonomie des Arbres 🌳")
+difficulty = st.selectbox("Sélectionne la difficulté :", list(DIFFICULTY_LEVELS.keys()))
+st.session_state.quiz_data['difficulty'] = difficulty
 
-@app.route('/set-difficulty', methods=['POST'])
-def set_difficulty():
-    """Set the quiz difficulty level"""
-    difficulty = request.json.get('difficulty', 'facile')
-    if difficulty in DIFFICULTY_LEVELS:
-        quiz_data['difficulty'] = difficulty
-        return jsonify({'status': 'success'})
-    return jsonify({'error': 'Invalid difficulty level'}), 400
-
-@app.route('/new-question')
-def new_question():
-    """Generate a new question based on current difficulty"""
-    # Reset attempts counter for new question
-    quiz_data['attempts'] = 0
-
-    # Select a random tree
-    quiz_data['current_tree'] = random.choice(TREES)
-    name, genus, species = quiz_data['current_tree'][:3]  # Ignore image path for now
+# Generate a new question when the button is clicked
+if st.button("Nouvelle Question"):
+    st.session_state.quiz_data['attempts'] = 0
+    tree = random.choice(TREES)
+    st.session_state.quiz_data['current_tree'] = tree
+    name, genus, species = tree[:3]  # Ignore image path for now
 
     # Check if this genus has multiple species
     genus_count = get_genus_species_count()
@@ -95,7 +78,7 @@ def new_question():
     all_options = [opt for opt in all_options if opt is not None]
 
     # Number of elements to guess based on difficulty
-    num_questions = min(DIFFICULTY_LEVELS[quiz_data['difficulty']], len(all_options))
+    num_questions = min(DIFFICULTY_LEVELS[st.session_state.quiz_data['difficulty']], len(all_options))
 
     # Randomly select which elements to ask
     selected_options = random.sample(all_options, num_questions)
@@ -108,7 +91,7 @@ def new_question():
             # Use "l'" instead of "le" for "espèce"
             question_text = f"l'{opt[0]}" if opt[0].startswith('e') else f"le {opt[0]}"
             questions.append(question_text)
-            quiz_data[f'answer_{opt[1]}'] = opt[2]  # Store answer
+            st.session_state.quiz_data[f'answer_{opt[1]}'] = opt[2]  # Store answer
         else:
             # Skip adding genre as hint if there are multiple species for this genus
             if has_multiple_species and opt[1] == 'genre':
@@ -120,73 +103,52 @@ def new_question():
         questions[-1] = "et " + questions[-1]
     question_text = ", ".join(questions)
 
-    quiz_data['expected_answers'] = [opt[1] for opt in selected_options]
+    st.session_state.quiz_data['expected_answers'] = [opt[1] for opt in selected_options]
 
-    return jsonify({
-        'question': f"Pour cet arbre, trouvez {question_text} :",
-        'hints': hints,
-        'num_answers': num_questions,
-        'attempts': quiz_data['attempts']
-    })
+    st.write(f"Pour cet arbre, trouvez {question_text} :")
+    st.write("Indices :")
+    for hint in hints:
+        st.write(hint)
 
-@app.route('/check-answer', methods=['POST'])
-def check_answer():
-    """Check the submitted answers"""
-    answers = request.json.get('answers', {})
-
+# Check the submitted answers
+answers = {}
+answer = st.text_input("Votre réponse :")
+if st.button("Valider"):
+    answers = {key: answer for key in st.session_state.quiz_data['expected_answers']}
     if not answers:
-        return jsonify({
-            'error': 'Veuillez entrer une réponse avant de valider.'
-        }), 400
+        st.error('Veuillez entrer une réponse avant de valider.')
+    else:
+        st.session_state.quiz_data['attempts'] += 1
+        show_answers = st.session_state.quiz_data['attempts'] >= 3  # Show answers after 3 attempts
 
-    # Increment attempts counter
-    quiz_data['attempts'] += 1
-    show_answers = quiz_data['attempts'] >= 3  # Show answers after 3 attempts
+        correct_count = 0
+        results = {}
 
-    correct_count = 0
-    results = {}
+        # Check each expected answer
+        for answer_type in st.session_state.quiz_data['expected_answers']:
+            user_answer = normalize_answer(answers.get(answer_type, ''))
+            correct_answer = normalize_answer(st.session_state.quiz_data[f'answer_{answer_type}'])
 
-    # Check each expected answer
-    for answer_type in quiz_data['expected_answers']:
-        user_answer = normalize_answer(answers.get(answer_type, ''))
-        correct_answer = normalize_answer(quiz_data[f'answer_{answer_type}'])
+            is_correct = user_answer == correct_answer
+            if is_correct:
+                correct_count += 1
 
-        is_correct = user_answer == correct_answer
-        if is_correct:
-            correct_count += 1
+            results[answer_type] = {
+                'is_correct': is_correct,
+                'correct_answer': st.session_state.quiz_data[f'answer_{answer_type}'],
+                'show_answer': show_answers  # Add flag to show answer after 3 attempts
+            }
 
-        results[answer_type] = {
-            'is_correct': is_correct,
-            'correct_answer': quiz_data[f'answer_{answer_type}'],
-            'show_answer': show_answers  # Add flag to show answer after 3 attempts
-        }
+        # Only count as a completed question if either all answers are correct or we've used all attempts
+        if correct_count == len(st.session_state.quiz_data['expected_answers']) or show_answers:
+            st.session_state.quiz_data['total_questions'] += 1
+            if correct_count == len(st.session_state.quiz_data['expected_answers']):
+                st.session_state.quiz_data['correct_answers'] += 1
 
-    # Only count as a completed question if either all answers are correct or we've used all attempts
-    if correct_count == len(quiz_data['expected_answers']) or show_answers:
-        quiz_data['total_questions'] += 1
-        if correct_count == len(quiz_data['expected_answers']):
-            quiz_data['correct_answers'] += 1
+        percentage = int(st.session_state.quiz_data['correct_answers'] / st.session_state.quiz_data['total_questions'] * 100) if st.session_state.quiz_data['total_questions'] > 0 else 0
 
-    percentage = int(quiz_data['correct_answers'] / quiz_data['total_questions'] * 100) if quiz_data['total_questions'] > 0 else 0
+        st.write(f"Score: {st.session_state.quiz_data['correct_answers']}/{st.session_state.quiz_data['total_questions']} ({percentage}%)")
 
-    return jsonify({
-        'results': results,
-        'all_correct': correct_count == len(quiz_data['expected_answers']),
-        'attempts_left': 3 - quiz_data['attempts'],
-        'show_answers': show_answers,
-        'score': f"Score: {quiz_data['correct_answers']}/{quiz_data['total_questions']} ({percentage}%)"
-    })
-
-@app.route('/help')
-def help():
-    """Get help text"""
-    return jsonify({'help_text': HELP_TEXT})
-
-if __name__ == '__main__':
-    import os
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8502)))
-
-
-
-
-
+# Display help text
+if st.button("Aide"):
+    st.write(HELP_TEXT)
